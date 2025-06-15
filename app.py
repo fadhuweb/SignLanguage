@@ -7,6 +7,7 @@ import cv2
 import torch
 import tempfile
 import requests
+from functools import lru_cache
 from werkzeug.utils import secure_filename
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -19,7 +20,7 @@ app.static_folder = 'static'
 
 # === Model Auto-Download ===
 MODEL_URL = "https://huggingface.co/datasets/fadhuweb/best_slt_model/resolve/main/best_slt_model.pt"
-MODEL_PATH = "/tmp/best_slt_model.pt"  # Use /tmp for compatibility on Render and other platforms
+MODEL_PATH = "/tmp/best_slt_model.pt"  # Use /tmp for Render or other cloud platforms
 
 def download_model():
     if not os.path.exists(MODEL_PATH):
@@ -29,7 +30,7 @@ def download_model():
             with open(MODEL_PATH, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
-        # Basic content validation
+        # Basic HTML check
         with open(MODEL_PATH, "rb") as f:
             head = f.read(10)
             if head.startswith(b"<!DOCTYPE") or b"<html" in head:
@@ -52,13 +53,11 @@ MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16 MB
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
-# === Load model ===
-try:
-    translator = SignLanguageTranslator(MODEL_PATH, device=DEVICE)
-    print(f"✅ Model loaded successfully on {DEVICE}")
-except Exception as e:
-    print(f"❌ Error loading model: {str(e)}")
-    translator = None
+# === Lazy Model Load ===
+@lru_cache()
+def get_translator():
+    print("🧠 Loading model into memory...")
+    return SignLanguageTranslator(MODEL_PATH, device=DEVICE)
 
 @app.route('/')
 def index():
@@ -66,22 +65,24 @@ def index():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy", "model_loaded": translator is not None})
+    try:
+        _ = get_translator()
+        return jsonify({"status": "healthy", "model_loaded": True})
+    except Exception as e:
+        return jsonify({"status": "error", "model_loaded": False, "error": str(e)}), 500
 
 @app.route('/api/model-info', methods=['GET'])
 def model_info():
-    if translator is None:
-        return jsonify({"error": "Model not loaded"}), 500
     try:
+        translator = get_translator()
         return jsonify(translator.get_model_info())
     except Exception as e:
         return jsonify({"error": f"Failed to get model info: {str(e)}"}), 500
 
 @app.route('/api/translate', methods=['POST'])
 def translate_sign_language():
-    if translator is None:
-        return jsonify({"error": "Model not loaded"}), 500
     try:
+        translator = get_translator()
         data = request.json
         if not data or 'image' not in data:
             return jsonify({"error": "No image provided"}), 400
@@ -91,16 +92,14 @@ def translate_sign_language():
         image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
         translation = translator.translate_image(image)
-        confidence = 0.8
-        return jsonify({"translation": translation, "confidence": confidence})
+        return jsonify({"translation": translation, "confidence": 0.8})
     except Exception as e:
         return jsonify({"error": f"Translation failed: {str(e)}"}), 500
 
 @app.route('/api/translate-sequence', methods=['POST'])
 def translate_sequence():
-    if translator is None:
-        return jsonify({"error": "Model not loaded"}), 500
     try:
+        translator = get_translator()
         data = request.json
         if not data or 'frames' not in data or not data['frames']:
             return jsonify({"error": "No frames provided"}), 400
@@ -113,16 +112,14 @@ def translate_sequence():
             frames.append(image)
 
         translation = translator.translate_sequence(frames)
-        confidence = 0.8
-        return jsonify({"translation": translation, "confidence": confidence})
+        return jsonify({"translation": translation, "confidence": 0.8})
     except Exception as e:
         return jsonify({"error": f"Sequence translation failed: {str(e)}"}), 500
 
 @app.route('/api/translate-live-frame', methods=['POST'])
 def translate_live_frame():
-    if translator is None:
-        return jsonify({"error": "Model not loaded"}), 500
     try:
+        translator = get_translator()
         data = request.json
         if not data or 'frame' not in data:
             return jsonify({"error": "No frame provided"}), 400
@@ -132,16 +129,14 @@ def translate_live_frame():
         image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
         translation = translator.translate_image(image)
-        confidence = 0.8
-        return jsonify({"translation": translation, "confidence": confidence})
+        return jsonify({"translation": translation, "confidence": 0.8})
     except Exception as e:
         return jsonify({"error": f"Live frame processing failed: {str(e)}"}), 500
 
 @app.route('/api/translate-live-buffer', methods=['POST'])
 def translate_live_buffer():
-    if translator is None:
-        return jsonify({"error": "Model not loaded"}), 500
     try:
+        translator = get_translator()
         data = request.json
         if not data or 'frames' not in data or not data['frames']:
             return jsonify({"error": "No frames provided"}), 400
@@ -154,8 +149,7 @@ def translate_live_buffer():
             frames.append(image)
 
         translation = translator.translate_sequence(frames)
-        confidence = 0.8
-        return jsonify({"translation": translation, "confidence": confidence})
+        return jsonify({"translation": translation, "confidence": 0.8})
     except Exception as e:
         return jsonify({"error": f"Live buffer processing failed: {str(e)}"}), 500
 
@@ -199,9 +193,8 @@ def extract_frames_from_video(video_path, max_frames=30):
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
-    if translator is None:
-        return jsonify({"error": "Model not loaded"}), 500
     try:
+        translator = get_translator()
         if 'file' not in request.files:
             return jsonify({"error": "No file provided"}), 400
 
@@ -223,10 +216,9 @@ def upload_file():
                     return jsonify({"error": "Could not read image file"}), 400
 
                 translation = translator.translate_image(image)
-                confidence = 0.8
                 return jsonify({
                     "translation": translation,
-                    "confidence": confidence,
+                    "confidence": 0.8,
                     "file_type": "image"
                 })
 
@@ -237,10 +229,9 @@ def upload_file():
                     return jsonify({"error": "Could not extract frames"}), 400
 
                 translation = translator.translate_sequence(frames)
-                confidence = 0.8
                 return jsonify({
                     "translation": translation,
-                    "confidence": confidence,
+                    "confidence": 0.8,
                     "file_type": "video",
                     "frames_processed": len(frames)
                 })
@@ -257,6 +248,6 @@ def upload_file():
     except Exception as e:
         return jsonify({"error": f"File upload failed: {str(e)}"}), 500
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
