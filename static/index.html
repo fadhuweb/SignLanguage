@@ -64,8 +64,10 @@
   <script>
     const liveOutput = document.querySelector("#liveOutput strong");
     const uploadOutput = document.querySelector("#uploadOutput strong");
-    const API_LIVE = "http://localhost:5000/api/translate-live-buffer";
-    const API_UPLOAD = "http://localhost:5000/api/upload";
+
+    const BASE_URL = "https://signlanguage-production.up.railway.app";
+    const API_LIVE = `${BASE_URL}/api/translate-live-buffer`;
+    const API_UPLOAD = `${BASE_URL}/api/upload`;
 
     // Webcam translation
     const webcam = document.getElementById("webcam");
