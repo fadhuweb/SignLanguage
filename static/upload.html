@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Buffered ASL Translator</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background: #f9f9f9;
+      color: #333;
+    }
+    h1 {
+      margin-top: 20px;
+    }
+    video {
+      border: 2px solid #444;
+      border-radius: 12px;
+      margin-top: 20px;
+    }
+    #output {
+      margin-top: 20px;
+      font-size: 1.6rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Live Sign Language Translator (Buffered)</h1>
+  <video id="webcam" autoplay playsinline width="480" height="360"></video>
+  <div id="output">Translation: <strong>Waiting...</strong></div>
+
+  <script>
+    const video = document.getElementById('webcam');
+    const output = document.querySelector('#output strong');
+    const API_URL = 'http://localhost:5000/api/translate-live-buffer'; // Update if deployed
+
+    const bufferSize = 16;
+    let frameBuffer = [];
+
+    // Start webcam
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => {
+        video.srcObject = stream;
+      })
+      .catch(err => {
+        alert("Could not access webcam: " + err);
+      });
+
+    // Capture a frame from the webcam
+    function captureFrame() {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+
+      // Strip "data:image/jpeg;base64," prefix
+      const base64Image = canvas.toDataURL('image/jpeg').split(',')[1];
+      return base64Image;
+    }
+
+    // Every 300ms: capture frame and buffer it
+    setInterval(() => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        const frame = captureFrame();
+        frameBuffer.push(frame);
+
+        // If buffer full, send to backend
+        if (frameBuffer.length >= bufferSize) {
+          fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ frames: frameBuffer })
+          })
+          .then(res => res.json())
+          .then(data => {
+            if (data.translation) {
+              output.textContent = data.translation;
+            } else {
+              output.textContent = 'Error: ' + (data.error || 'No response');
+            }
+          })
+          .catch(err => {
+            output.textContent = `Request failed: ${err}`;
+          });
+
+          frameBuffer = []; // Clear buffer after sending
+        }
+      }
+    }, 300);
+  </script>
+</body>
+</html>

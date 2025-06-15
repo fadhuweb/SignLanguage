@@ -1,0 +1,33 @@
+# Node modules (React frontend)
+frontend/node_modules/
+
+# React build output (optional)
+frontend/build/
+
+# Python virtual environment
+venv/
+backend/venv/
+
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+
+# Flask environment variables
+.env
+*.env
+
+# VS Code settings
+.vscode/
+
+# macOS system files
+.DS_Store
+
+# Log files
+*.log
+
+# Pytest cache
+.pytest_cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/

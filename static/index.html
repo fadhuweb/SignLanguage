@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sign Language Translator</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f4f4;
+      margin: 0;
+      padding: 20px;
+      text-align: center;
+    }
+    h1 {
+      margin-bottom: 10px;
+    }
+    video, canvas {
+      border: 2px solid #444;
+      border-radius: 10px;
+      margin-top: 10px;
+    }
+    #output {
+      margin-top: 20px;
+      font-size: 1.2rem;
+    }
+    .section {
+      background: white;
+      margin: 20px auto;
+      padding: 20px;
+      border-radius: 10px;
+      width: 90%;
+      max-width: 600px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+    label, input, button {
+      display: block;
+      margin: 10px auto;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Sign Language Translator</h1>
+
+  <!-- Section 1: Live Webcam Translation -->
+  <div class="section">
+    <h2>Live Webcam Translation</h2>
+    <video id="webcam" autoplay playsinline width="480" height="360"></video>
+    <div id="liveOutput">Translation: <strong>Waiting...</strong></div>
+  </div>
+
+  <!-- Section 2: File Upload Translation -->
+  <div class="section">
+    <h2>Upload Image or Video</h2>
+    <form id="uploadForm" enctype="multipart/form-data">
+      <input type="file" id="fileInput" name="file" accept="image/*,video/*" />
+      <label for="max_frames">Max frames (for videos):</label>
+      <input type="number" id="maxFrames" name="max_frames" value="30" min="1" max="60" />
+      <button type="submit">Upload & Translate</button>
+    </form>
+    <div id="uploadOutput">Translation: <strong>Waiting...</strong></div>
+  </div>
+
+  <script>
+    const liveOutput = document.querySelector("#liveOutput strong");
+    const uploadOutput = document.querySelector("#uploadOutput strong");
+    const API_LIVE = "http://localhost:5000/api/translate-live-buffer";
+    const API_UPLOAD = "http://localhost:5000/api/upload";
+
+    // Webcam translation
+    const webcam = document.getElementById("webcam");
+    const frameBuffer = [];
+    const bufferSize = 16;
+
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => {
+        webcam.srcObject = stream;
+      })
+      .catch(err => alert("Webcam access denied: " + err));
+
+    function captureWebcamFrame() {
+      const canvas = document.createElement("canvas");
+      canvas.width = webcam.videoWidth;
+      canvas.height = webcam.videoHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(webcam, 0, 0);
+      return canvas.toDataURL("image/jpeg").split(',')[1];
+    }
+
+    setInterval(() => {
+      if (webcam.videoWidth > 0 && webcam.videoHeight > 0) {
+        const frame = captureWebcamFrame();
+        frameBuffer.push(frame);
+        if (frameBuffer.length >= bufferSize) {
+          fetch(API_LIVE, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ frames: frameBuffer })
+          })
+          .then(res => res.json())
+          .then(data => {
+            if (data.translation) {
+              liveOutput.textContent = data.translation;
+            } else {
+              liveOutput.textContent = "Error: " + (data.error || "No response");
+            }
+          })
+          .catch(err => {
+            liveOutput.textContent = "Error: " + err;
+          });
+          frameBuffer.length = 0;
+        }
+      }
+    }, 300);
+
+    // File upload translation
+    document.getElementById("uploadForm").addEventListener("submit", e => {
+      e.preventDefault();
+      const fileInput = document.getElementById("fileInput");
+      const maxFrames = document.getElementById("maxFrames").value;
+      const formData = new FormData();
+      const file = fileInput.files[0];
+
+      if (!file) {
+        alert("Please select a file.");
+        return;
+      }
+
+      formData.append("file", file);
+      formData.append("max_frames", maxFrames);
+
+      fetch(API_UPLOAD, {
+        method: "POST",
+        body: formData
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.translation) {
+          uploadOutput.textContent = data.translation + ` (confidence: ${data.confidence})`;
+        } else {
+          uploadOutput.textContent = "Error: " + (data.error || "No response");
+        }
+      })
+      .catch(err => {
+        uploadOutput.textContent = "Error: " + err;
+      });
+    });
+  </script>
+</body>
+</html>
