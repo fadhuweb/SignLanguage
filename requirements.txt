@@ -1,8 +1,14 @@
+# Use PyTorch CPU-only builds
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.2.2
+torchvision==0.17.2
+
+# Other dependencies
 Flask==2.3.2
 flask-cors==4.0.0
-torch==2.2.2+cpu
-torchvision==0.17.2+cpu
 transformers==4.41.1
+tokenizers==0.19.1
 opencv-python-headless==4.9.0.80
 numpy==1.26.4
 Pillow==10.2.0
