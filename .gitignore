@@ -31,3 +31,5 @@ __pycache__/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
+
+model_cache/

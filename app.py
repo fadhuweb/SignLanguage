@@ -6,54 +6,55 @@ import numpy as np
 import cv2
 import torch
 import tempfile
-import requests
 from functools import lru_cache
 from werkzeug.utils import secure_filename
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from PIL import Image
+from huggingface_hub import hf_hub_download
 from model import SignLanguageTranslator
 
 # === Environment Configs ===
 os.environ["HF_HOME"] = "/tmp/huggingface"
-
-# Optional memory tweak for transformer models
 torch.set_float32_matmul_precision("medium")
 
 # === Flask App Init ===
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": [
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "https://signlanguage-production.up.railway.app"
+]}})
 app.static_folder = 'static'
 
 # === Configs ===
-MODEL_URL = "https://huggingface.co/datasets/fadhuweb/best_slt_model/resolve/main/best_slt_model.pt"
-MODEL_PATH = "/tmp/best_slt_model.pt"
+REPO_ID = "fadhuweb/best_slt_model"
+MODEL_FILENAME = "best_slt_model.pt"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
+MODEL_CACHE_DIR = os.path.join(os.path.dirname(__file__), 'model_cache')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
+
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp'}
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'wmv', 'webm'}
-MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16 MB
+MAX_CONTENT_LENGTH = 16 * 1024 * 1024
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
-# === Lazy Model Loader with On-Demand Download ===
+# === Lazy Model Loader with Persistent Cache ===
 @lru_cache()
 def get_translator():
-    if not os.path.exists(MODEL_PATH):
-        print("📦 Downloading model...")
-        with requests.get(MODEL_URL, stream=True) as r:
-            r.raise_for_status()
-            with open(MODEL_PATH, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        with open(MODEL_PATH, "rb") as f:
-            head = f.read(10)
-            if head.startswith(b"<!DOCTYPE") or b"<html" in head:
-                raise RuntimeError("Downloaded file is HTML. Check model URL or Hugging Face token.")
-        print("✅ Model downloaded.")
-    print("🧠 Loading model into memory...")
-    return SignLanguageTranslator(MODEL_PATH, device=DEVICE)
+    print("📦 Downloading model from Hugging Face (cached)...")
+    model_path = hf_hub_download(
+        repo_id=REPO_ID,
+        filename=MODEL_FILENAME,
+        repo_type="dataset",
+        local_dir=MODEL_CACHE_DIR
+    )
+    print("✅ Model downloaded to:", model_path)
+    print("🧠 Loading model...")
+    return SignLanguageTranslator(model_path, device=DEVICE)
 
 @app.route('/')
 def index():
