@@ -14,48 +14,44 @@ from flask_cors import CORS
 from PIL import Image
 from model import SignLanguageTranslator
 
+# === Environment Configs ===
+os.environ["HF_HOME"] = "/tmp/huggingface"
+
+# Optional memory tweak for transformer models
+torch.set_float32_matmul_precision("medium")
+
+# === Flask App Init ===
 app = Flask(__name__)
 CORS(app)
 app.static_folder = 'static'
 
-# === Model Auto-Download ===
+# === Configs ===
 MODEL_URL = "https://huggingface.co/datasets/fadhuweb/best_slt_model/resolve/main/best_slt_model.pt"
-MODEL_PATH = "/tmp/best_slt_model.pt"  # Use /tmp for Render or other cloud platforms
+MODEL_PATH = "/tmp/best_slt_model.pt"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp'}
+ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'wmv', 'webm'}
+MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16 MB
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
-def download_model():
+# === Lazy Model Loader with On-Demand Download ===
+@lru_cache()
+def get_translator():
     if not os.path.exists(MODEL_PATH):
-        print("📦 Downloading model from Hugging Face...")
+        print("📦 Downloading model...")
         with requests.get(MODEL_URL, stream=True) as r:
             r.raise_for_status()
             with open(MODEL_PATH, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
-        # Basic HTML check
         with open(MODEL_PATH, "rb") as f:
             head = f.read(10)
             if head.startswith(b"<!DOCTYPE") or b"<html" in head:
-                raise RuntimeError("Downloaded file is HTML (not a model). Check Hugging Face permissions or URL.")
-        print("✅ Model downloaded to", MODEL_PATH)
-
-download_model()
-
-# Device setup
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Upload settings
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp'}
-ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'wmv', 'webm'}
-MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16 MB
-
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
-
-# === Lazy Model Load ===
-@lru_cache()
-def get_translator():
+                raise RuntimeError("Downloaded file is HTML. Check model URL or Hugging Face token.")
+        print("✅ Model downloaded.")
     print("🧠 Loading model into memory...")
     return SignLanguageTranslator(MODEL_PATH, device=DEVICE)
 
@@ -86,11 +82,9 @@ def translate_sign_language():
         data = request.json
         if not data or 'image' not in data:
             return jsonify({"error": "No image provided"}), 400
-
         image_data = base64.b64decode(data['image'])
         image = Image.open(io.BytesIO(image_data))
         image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-
         translation = translator.translate_image(image)
         return jsonify({"translation": translation, "confidence": 0.8})
     except Exception as e:
@@ -103,14 +97,12 @@ def translate_sequence():
         data = request.json
         if not data or 'frames' not in data or not data['frames']:
             return jsonify({"error": "No frames provided"}), 400
-
         frames = []
         for b64 in data['frames']:
             image_data = base64.b64decode(b64)
             image = Image.open(io.BytesIO(image_data))
             image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
             frames.append(image)
-
         translation = translator.translate_sequence(frames)
         return jsonify({"translation": translation, "confidence": 0.8})
     except Exception as e:
@@ -123,11 +115,9 @@ def translate_live_frame():
         data = request.json
         if not data or 'frame' not in data:
             return jsonify({"error": "No frame provided"}), 400
-
         image_data = base64.b64decode(data['frame'])
         image = Image.open(io.BytesIO(image_data))
         image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-
         translation = translator.translate_image(image)
         return jsonify({"translation": translation, "confidence": 0.8})
     except Exception as e:
@@ -140,14 +130,12 @@ def translate_live_buffer():
         data = request.json
         if not data or 'frames' not in data or not data['frames']:
             return jsonify({"error": "No frames provided"}), 400
-
         frames = []
         for b64 in data['frames']:
             image_data = base64.b64decode(b64)
             image = Image.open(io.BytesIO(image_data))
             image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
             frames.append(image)
-
         translation = translator.translate_sequence(frames)
         return jsonify({"translation": translation, "confidence": 0.8})
     except Exception as e:
@@ -168,17 +156,13 @@ def allowed_file(filename, allowed_extensions):
 def extract_frames_from_video(video_path, max_frames=30):
     frames = []
     cap = cv2.VideoCapture(video_path)
-
     if not cap.isOpened():
         raise Exception("Error opening video file")
-
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0 or fps > 120:
         fps = 30
-
     frame_interval = max(1, total_frames // max_frames)
-
     frame_count = 0
     while True:
         ret, frame = cap.read()
@@ -187,7 +171,6 @@ def extract_frames_from_video(video_path, max_frames=30):
         if frame_count % frame_interval == 0 and len(frames) < max_frames:
             frames.append(frame)
         frame_count += 1
-
     cap.release()
     return frames
 
@@ -197,37 +180,30 @@ def upload_file():
         translator = get_translator()
         if 'file' not in request.files:
             return jsonify({"error": "No file provided"}), 400
-
         file = request.files['file']
         if file.filename == '':
             return jsonify({"error": "No file selected"}), 400
-
         filename = secure_filename(file.filename)
         file_ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
         temp_dir = tempfile.mkdtemp(dir=app.config['UPLOAD_FOLDER'])
         file_path = os.path.join(temp_dir, filename)
-
         try:
             file.save(file_path)
-
             if allowed_file(filename, ALLOWED_IMAGE_EXTENSIONS):
                 image = cv2.imread(file_path)
                 if image is None:
                     return jsonify({"error": "Could not read image file"}), 400
-
                 translation = translator.translate_image(image)
                 return jsonify({
                     "translation": translation,
                     "confidence": 0.8,
                     "file_type": "image"
                 })
-
             elif allowed_file(filename, ALLOWED_VIDEO_EXTENSIONS):
                 max_frames = request.form.get('max_frames', default=30, type=int)
                 frames = extract_frames_from_video(file_path, max_frames)
                 if not frames:
                     return jsonify({"error": "Could not extract frames"}), 400
-
                 translation = translator.translate_sequence(frames)
                 return jsonify({
                     "translation": translation,
