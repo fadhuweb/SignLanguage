@@ -155,75 +155,78 @@ class SignLanguageTranslationModel(torch.nn.Module):
         return output
 
 
+import torch
+import os
+import cv2
+import queue
+import nltk
+import transformers
+import numpy as np
+from typing import List, Optional
+from PIL import Image
+from torchvision import transforms
+ # Ensure your model is correctly imported
+
+
 class SignLanguageTranslator:
     """
     A class for loading and using a PyTorch sign language translation model.
     This class provides methods for translating sign language from images or video frames
     and supports real-time two-way communication between deaf and hearing people.
     """
-    
-    def __init__(self, model_path: str, device: Optional[torch.device] = None, 
+
+    def __init__(self, model_path: str, device: Optional[torch.device] = None,
                  frame_buffer_size: int = 30, translation_threshold: float = 0.6):
         """
         Initialize the sign language translator with a pre-trained model.
-        
+
         Args:
             model_path: Path to the saved PyTorch model (.pt file)
             device: The device to run the model on (CPU or CUDA). If None, will use CUDA if available.
             frame_buffer_size: Number of frames to buffer for continuous sign language detection
             translation_threshold: Confidence threshold for considering a translation valid
         """
-        # Set device (CPU or GPU)
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # Load the transformers models
-        transformers.logging.set_verbosity_error()  # Reduce verbosity
-        
-        # Try to download NLTK data for BLEU scoring if not already present
+        transformers.logging.set_verbosity_error()
+
         try:
             nltk.data.find('tokenizers/punkt')
         except LookupError:
             nltk.download('punkt', quiet=True)
-        
-        # Load the model
+
         print(f"Loading model from {model_path}...")
         self.model = self._load_model(model_path)
         self.model.to(self.device)
-        self.model.eval()  # Set model to evaluation mode
-        
-        # Extract the BART tokenizer from the model for decoding predictions
+        self.model.eval()
+
         self.tokenizer = self.model.bart_tokenizer
-        
-        # Set up image preprocessing
+
         self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),  # Size expected by DINOv2
+            transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],  # ImageNet normalization values
+                mean=[0.485, 0.456, 0.406],
                 std=[0.229, 0.224, 0.225]
             )
         ])
-        
-        # Configuration for real-time processing
+
         self.frame_buffer_size = frame_buffer_size
         self.translation_threshold = translation_threshold
         self.frame_buffer = []
         self.last_translation = ""
         self.last_translation_time = 0
-        self.translation_cooldown = 2.0  # seconds between translations
-        
-        # Real-time processing queues and flags
+        self.translation_cooldown = 2.0
+
         self.processing_queue = queue.Queue(maxsize=10)
         self.result_queue = queue.Queue()
         self.is_running = False
         self.processing_thread = None
-        
-        # Model info
+
         self._model_info = {
             "name": "Sign Language Translation Model",
             "type": "PyTorch",
             "architecture": "DINOv2-LSTM-BART",
-            "input_shape": [3, 224, 224],  # RGB image of size 224x224
+            "input_shape": [3, 224, 224],
             "output_type": "text",
             "model_path": model_path,
             "device": str(self.device),
@@ -231,32 +234,48 @@ class SignLanguageTranslator:
             "translation_threshold": translation_threshold
         }
 
+    def translate_sequence(self, frames: List[np.ndarray]) -> str:
+        """
+        Translate a sequence of video frames into a natural language sentence.
+
+        Args:
+            frames: List of RGB images (np.ndarray) representing a video clip.
+
+        Returns:
+            A string containing the predicted sentence.
+        """
+        processed_frames = []
+        for frame in frames:
+            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(img)
+            img = self.transform(img).unsqueeze(0)
+            processed_frames.append(img)
+
+        input_tensor = torch.cat(processed_frames, dim=0).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            output_ids = self.model.generate(input_tensor)
+            translation = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            return translation
+
     def _load_model(self, model_path: str) -> torch.nn.Module:
         """
         Load the PyTorch model from the specified path.
-        
+
         Args:
             model_path: Path to the saved PyTorch model (.pt file)
-            
+
         Returns:
             The loaded PyTorch model
-            
-        Raises:
-            FileNotFoundError: If the model file does not exist
-            RuntimeError: If there's an error loading the model
         """
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
-        
+
         try:
-            # Load the model
             model_data = torch.load(model_path, map_location=self.device, weights_only=False)
 
-            
-            # Handle different saved formats
             if isinstance(model_data, dict):
                 if "model_state_dict" in model_data:
-                    # Create a new model instance
                     model = SignLanguageTranslationModel(
                         dino_model_name=model_data.get("dino_model_name", "facebook/dinov2-base"),
                         bart_model_name=model_data.get("bart_model_name", "facebook/bart-base"),
@@ -267,13 +286,10 @@ class SignLanguageTranslator:
                         freeze_dino=True,
                         max_length=model_data.get("max_length", 50)
                     )
-                    # Load the state dict
                     model.load_state_dict(model_data["model_state_dict"])
                     return model
                 else:
-                    # Try to treat model_data as a state dict directly
                     try:
-                        # Create a new model instance with default parameters
                         model = SignLanguageTranslationModel(
                             dino_model_name="facebook/dinov2-base",
                             bart_model_name="facebook/bart-base",
@@ -284,21 +300,18 @@ class SignLanguageTranslator:
                             freeze_dino=True,
                             max_length=50
                         )
-                        # Try to load the dict as a state dict
                         model.load_state_dict(model_data)
                         print("Successfully loaded state dictionary into a new model instance")
                         return model
                     except Exception as state_dict_error:
                         print(f"Failed to load as state dict: {str(state_dict_error)}")
-                        # If we can't load it as a state dict, it might be a complete model
                         if hasattr(model_data, 'to') and callable(getattr(model_data, 'to')):
                             return model_data
                         else:
-                            raise RuntimeError(f"The loaded object is not a valid PyTorch model and cannot be loaded as a state dict")
+                            raise RuntimeError("Loaded object is not a valid PyTorch model.")
             else:
-                # Assuming the model object itself was saved
                 return model_data
-                
+
         except Exception as e:
             raise RuntimeError(f"Failed to load model: {str(e)}")
     
